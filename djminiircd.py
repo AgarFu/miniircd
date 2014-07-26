@@ -27,6 +27,65 @@ import re
 import sys
 from optparse import OptionParser
 from miniircd import Client, Server
+from django.contrib.auth import authenticate
+
+class DjangoClient(Client):
+    def __init__(self, server, socket):
+        super(DjangoClient, self).__init__(server, socket)
+        self._Client__handle_command = self.__registration_handler
+
+    def __registration_handler(self, command, arguments):
+
+        server = self.server
+        if command == "PASS":
+            if len(arguments) == 0:
+                self.reply_461("PASS")
+            else:
+                self.password = arguments[0]
+        elif command == "NICK":
+            if len(arguments) < 1:
+                self.reply("431 :No nickname given")
+                return
+            nick = arguments[0]
+            if server.get_client(nick):
+                self.reply("433 * %s :Nickname is already in use" % nick)
+            elif not self._Client__valid_nickname_regexp.match(nick):
+                self.reply("432 * %s :Erroneous nickname" % nick)
+            else:
+                user = authenticate(username=nick, password=self.password)
+                print "User: ", user
+                if not user:
+                    server.print_debug('Wrong password')
+                    self.reply("464 :Password incorrect")
+                else:
+                    server.print_debug('User %s authenticated' % nick)
+                    self.nickname = nick
+                    server.client_changed_nickname(self, None)
+        elif command == "USER":
+            if len(arguments) < 4:
+                self.reply_461("USER")
+                return
+            self.user = arguments[0]
+            self.realname = arguments[3]
+        elif command == "QUIT":
+            self.disconnect("Client quit")
+            return
+        if self.nickname and self.user:
+            self.reply("001 %s :Hi, welcome to IRC" % self.nickname)
+            self.reply("002 %s :Your host is %s, running version miniircd-%s"
+                       % (self.nickname, server.name, VERSION))
+            self.reply("003 %s :This server was created sometime"
+                       % self.nickname)
+            self.reply("004 %s :%s miniircd-%s o o"
+                       % (self.nickname, server.name, VERSION))
+            self.send_lusers()
+            self.send_motd()
+            self._Client__handle_command = self._Client__command_handler
+
+class DjangoServer(Server):
+    def client_factory(self, conn):
+        return DjangoClient(self, conn)
+
 
 def main(argv):
     op = OptionParser(
@@ -53,10 +112,6 @@ def main(argv):
         metavar="FILE",
         help="enable SSL and use FILE as the .pem certificate+key")
     op.add_option(
-        "-p", "--password",
-        metavar="X",
-        help="require connection password X; default: no password")
-    op.add_option(
         "--ports",
         metavar="X",
         help="listen to ports X (a list separated by comma or whitespace);"
@@ -82,6 +137,7 @@ def main(argv):
                  " (requires root)")
 
     (options, args) = op.parse_args(argv[1:])
+    options.password = None
     if options.debug:
         options.verbose = True
     if options.ports is None:
@@ -120,7 +176,7 @@ def main(argv):
         except ValueError:
             op.error("bad port: %r" % port)
     options.ports = ports
-    server = Server(options)
+    server = DjangoServer(options)
     if options.daemon:
         server.daemonize()
     try:
