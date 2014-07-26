@@ -33,6 +33,7 @@ class DjangoClient(Client):
     def __init__(self, server, socket):
         super(DjangoClient, self).__init__(server, socket)
         self._Client__handle_command = self.__registration_handler
+        self.password = None
 
     def __registration_handler(self, command, arguments):
 
